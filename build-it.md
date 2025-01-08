@@ -138,3 +138,25 @@ feature that you think should be present, feel free to describe it
 so long as you state clearly that it is not implemented; for
 well-described attacks and designs without implementation, partial
 credit will be available.
+
+### Rubric
+
+There are 16 items that we consider for your score:
+ * Design description for the system
+ * Vulnerabilities (x5)
+    * Vulnerability identified
+    * Mitigation described (eg, "To protect against X, we could do...")
+    * Mitigation implemented (your code actually does what you described)
+
+That gives us 16 items, each of which is graded on the EMRN scale. The
+document score is determined with the following subcontract:
+
+ * **E:**
+    * at least 14 M’s or better
+    * at least 11 E’s
+    * design document at least an R
+ * **M:**
+    * at least 12 M’s or better
+    * at least 8 E’s
+ * **R:**
+    * at least 12 R’s

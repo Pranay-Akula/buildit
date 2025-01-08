@@ -79,7 +79,8 @@ summary of what attacks (if any) you were able to find.*
 
 Your analysis should be submitted as text in the provided field on ELMS,
 under the "break-it" assignment. If you have images to include, use the
-file upload for your submission.
+file upload for your submission. For an E, we will generally want to see
+screenshots or a video demonstrating a successful attack.
 
 You should also submit (via file upload) any code you wrote to
 implement your attack. This will likely include the modified router code,
