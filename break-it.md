@@ -16,7 +16,8 @@ named "Gizmonic"):
     git clone https://gitlab.cs.umd.edu/cmsc414-marsh/teams/Gizmonic/atm Gizmonic
 
 This will clone the target team's repository into a directory named
-`Gizmonic`, rather than `atm`.
+`Gizmonic`, rather than `atm`. Since teams might update their code during this
+phase, the version you are responsible for attacking has been tagged `target`.
 
 
 ## Rules of Engagement
