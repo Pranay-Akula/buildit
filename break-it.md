@@ -91,16 +91,17 @@ analysis.
 
 ## Grading
 
-Part 2 is worth 20 points. A successful attack (that is also described
-clearly in the vulnerability analysis) will automatically be awarded 20
-points. Even if you are not able to find a successful attack, you can
-still get points by
+Part 2 is graded on the EMRN scale. A successful attack (that is
+also described clearly in the vulnerability analysis) will automatically
+be awarded an E. You will likely be able to find at least one target
+with an exploitable vulnerability, and this is the preferable form
+of submission. If you are not able to find a successful attack, you
+can still get credit by
 
  1. pointing out potential vulnerabilities that your were not able
     to successfully exploit, and/or
  2. writing a good vulnerability analysis that outlines the exploits
     you looked for and argues why they are not present in the
-    implementation you were attacking.
+    implementation you were attacking; this will need to be fairly
+    exhaustive for an E.
 
-I reserve the right to award *extra* points for multiple attacks, or
-particularly clever attacks, so be creative!
