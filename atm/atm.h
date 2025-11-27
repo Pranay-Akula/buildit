@@ -24,8 +24,15 @@ typedef struct _ATM
     struct sockaddr_in rtr_addr;
     struct sockaddr_in atm_addr;
 
-    // Protocol state
-    // TODO add more, as needed
+    // Protocol / session state
+    int  logged_in;              // 0 = no user logged in, 1 = user logged in
+    char current_user[251];      // currently logged-in username (if any)
+
+    // Later (for Idea 1): global key K, sequence number, card secret, etc.
+    // unsigned char key_K[...];
+    // unsigned long long seq;
+    // char card_secret[...];
+
 } ATM;
 
 ATM* atm_create();

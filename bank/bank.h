@@ -20,6 +20,17 @@
 #include <netinet/in.h>
 #include <stdio.h>
 
+#define MAX_USERS 1000
+
+typedef struct _User {
+    char username[251];  // [a-zA-Z]+, up to 250 chars + null
+    char pin[5];         // 4 digits + null (we can hash later if we want)
+    int  balance;        // current balance
+    // Later for Idea 1:
+    // char card_secret[33];
+    // unsigned long long last_seq;
+} User;
+
 typedef struct _Bank
 {
     // Networking state
@@ -27,8 +38,13 @@ typedef struct _Bank
     struct sockaddr_in rtr_addr;
     struct sockaddr_in bank_addr;
 
-    // Protocol state
-    // TODO add more, as needed
+    // Protocol / account state
+    User users[MAX_USERS];
+    int  num_users;
+
+    // Later for Idea 1:
+    // unsigned char key_K[...];
+
 } Bank;
 
 Bank* bank_create();
@@ -39,4 +55,3 @@ void bank_process_local_command(Bank *bank, char *command, size_t len);
 void bank_process_remote_command(Bank *bank, char *command, size_t len);
 
 #endif
-
