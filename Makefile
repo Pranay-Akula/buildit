@@ -1,23 +1,35 @@
 CC = gcc
 
-ifeq ($(CC),clang)
-  STACK_FLAGS = -fno-stack-protector -Wl,-allow_stack_execute
+# Detect OS for stack flags
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  # macOS - just disable stack protector (executable stack not available)
+  STACK_FLAGS = -fno-stack-protector
 else
+  # Linux
   STACK_FLAGS = -fno-stack-protector -z execstack
 endif
 
-CFLAGS = ${STACK_FLAGS} -Wall -Iutil -Iatm -Ibank -Irouter -I.
+# OpenSSL paths for macOS (Homebrew)
+OPENSSL_INCLUDE = -I/opt/homebrew/opt/openssl@3/include
+OPENSSL_LIB = -L/opt/homebrew/opt/openssl@3/lib
 
-all: bin bin/atm bin/bank bin/router
+CFLAGS = ${STACK_FLAGS} -Wall -Iutil -Iatm -Ibank -Irouter -I. ${OPENSSL_INCLUDE}
+LDFLAGS = ${OPENSSL_LIB} -lcrypto
+
+all: bin bin/init bin/atm bin/bank bin/router
 
 bin:
 	mkdir -p bin
 
-bin/atm : atm/atm-main.c atm/atm.c
-	${CC} ${CFLAGS} atm/atm.c atm/atm-main.c -o bin/atm
+bin/init : init.c
+	${CC} ${CFLAGS} init.c -o bin/init ${LDFLAGS}
 
-bin/bank : bank/bank-main.c bank/bank.c
-	${CC} ${CFLAGS} bank/bank.c bank/bank-main.c -o bin/bank
+bin/atm : atm/atm-main.c atm/atm.c util/crypto.c
+	${CC} ${CFLAGS} util/crypto.c atm/atm.c atm/atm-main.c -o bin/atm ${LDFLAGS}
+
+bin/bank : bank/bank-main.c bank/bank.c util/crypto.c
+	${CC} ${CFLAGS} util/crypto.c bank/bank.c bank/bank-main.c -o bin/bank ${LDFLAGS}
 
 bin/router : router/router-main.c router/router.c
 	${CC} ${CFLAGS} router/router.c router/router-main.c -o bin/router

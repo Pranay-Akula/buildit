@@ -21,14 +21,15 @@
 #include <stdio.h>
 
 #define MAX_USERS 1000
+#define KEY_SIZE 32             // 256 bits for AES-256
+#define CARD_SECRET_SIZE 32     // 256 bits for card secret
 
 typedef struct _User {
-    char username[251];  // [a-zA-Z]+, up to 250 chars + null
-    char pin[5];         // 4 digits + null (we can hash later if we want)
-    int  balance;        // current balance
-    // Later for Idea 1:
-    // char card_secret[33];
-    // unsigned long long last_seq;
+    char username[251];                             // [a-zA-Z]+, up to 250 chars + null
+    char pin[5];                                    // 4 digits + null
+    int  balance;                                   // current balance
+    unsigned char card_secret[CARD_SECRET_SIZE];   // per-user card secret for authentication
+    unsigned long long last_seq;                    // last valid sequence number (replay protection)
 } User;
 
 typedef struct _Bank
@@ -37,17 +38,19 @@ typedef struct _Bank
     int sockfd;
     struct sockaddr_in rtr_addr;
     struct sockaddr_in bank_addr;
+    struct sockaddr_in last_client_addr;  // Address of last received packet (for replies)
 
     // Protocol / account state
     User users[MAX_USERS];
     int  num_users;
 
-    // Later for Idea 1:
-    // unsigned char key_K[...];
+    // Cryptographic state (Idea 1)
+    unsigned char key_K[KEY_SIZE];  // shared symmetric key from *.bank file
+    int key_loaded;                  // 1 if key_K has been loaded, 0 otherwise
 
 } Bank;
 
-Bank* bank_create();
+Bank* bank_create(const char *bank_init_file);
 void bank_free(Bank *bank);
 ssize_t bank_send(Bank *bank, char *data, size_t data_len);
 ssize_t bank_recv(Bank *bank, char *data, size_t max_data_len);

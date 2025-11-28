@@ -1,12 +1,14 @@
 #include "bank.h"
 #include "ports.h"
+#include "protocol.h"
+#include "crypto.h"
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <ctype.h>
 #include <limits.h>
 
-Bank* bank_create()
+Bank* bank_create(const char *bank_init_file)
 {
     Bank *bank = (Bank*) malloc(sizeof(Bank));
     if(bank == NULL)
@@ -15,7 +17,7 @@ Bank* bank_create()
         exit(1);
     }
 
-    // Set up the network state (for later when we add remote protocol)
+    // Set up the network state
     bank->sockfd = socket(AF_INET,SOCK_DGRAM,0);
 
     bzero(&bank->rtr_addr,sizeof(bank->rtr_addr));
@@ -31,6 +33,29 @@ Bank* bank_create()
 
     // Initialize account state
     bank->num_users = 0;
+    
+    // Initialize cryptographic state
+    bank->key_loaded = 0;
+    memset(bank->key_K, 0, KEY_SIZE);
+    
+    // Load shared key K from init file
+    FILE *key_file = fopen(bank_init_file, "rb");
+    if (key_file == NULL) {
+        printf("Error opening bank initialization file\n");
+        free(bank);
+        exit(64);
+    }
+    
+    size_t bytes_read = fread(bank->key_K, 1, KEY_SIZE, key_file);
+    fclose(key_file);
+    
+    if (bytes_read != KEY_SIZE) {
+        printf("Error opening bank initialization file\n");
+        free(bank);
+        exit(64);
+    }
+    
+    bank->key_loaded = 1;
 
     return bank;
 }
@@ -47,6 +72,7 @@ void bank_free(Bank *bank)
 ssize_t bank_send(Bank *bank, char *data, size_t data_len)
 {
     // Returns the number of bytes sent; negative on error
+    // Send to router, which will forward back to ATM based on source port
     return sendto(bank->sockfd, data, data_len, 0,
                   (struct sockaddr*) &bank->rtr_addr, sizeof(bank->rtr_addr));
 }
@@ -167,19 +193,31 @@ void bank_process_local_command(Bank *bank, char *command, size_t len)
             return;
         }
 
+        // Generate random card secret (32 bytes)
+        unsigned char card_secret[CARD_SECRET_SIZE];
+        if (generate_random_bytes(card_secret, CARD_SECRET_SIZE) != 0) {
+            printf("Error creating card file for user %s\n", user);
+            return;
+        }
+
         // Create card file first (so if it fails, we don't modify state)
         char card_filename[300];
         snprintf(card_filename, sizeof(card_filename), "%s.card", user);
-        FILE *cf = fopen(card_filename, "w");
+        FILE *cf = fopen(card_filename, "wb");
         if (cf == NULL) {
             printf("Error creating card file for user %s\n", user);
             return;
         }
 
-        // For now, the card file just stores the username.
-        // Later we'll add card_secret, etc.
-        fprintf(cf, "%s\n", user);
+        // Write 32-byte card secret to card file (binary format)
+        size_t written = fwrite(card_secret, 1, CARD_SECRET_SIZE, cf);
         fclose(cf);
+        
+        if (written != CARD_SECRET_SIZE) {
+            remove(card_filename);  // Clean up partial file
+            printf("Error creating card file for user %s\n", user);
+            return;
+        }
 
         // Now update bank state
         User *u = &bank->users[bank->num_users++];
@@ -188,6 +226,10 @@ void bank_process_local_command(Bank *bank, char *command, size_t len)
         strncpy(u->pin, pin, sizeof(u->pin));
         u->pin[sizeof(u->pin)-1] = '\0';
         u->balance = balance;
+        
+        // Store card secret and initialize sequence number
+        memcpy(u->card_secret, card_secret, CARD_SECRET_SIZE);
+        u->last_seq = 0;  // Initialize sequence number to 0
 
         printf("Created user %s\n", user);
         return;
@@ -249,19 +291,223 @@ void bank_process_local_command(Bank *bank, char *command, size_t len)
     printf("Invalid command\n");
 }
 
+/**
+ * bank_send_encrypted: Encrypt plaintext message and send to ATM
+ * 
+ * Protocol: [IV (16 bytes)] [Ciphertext (variable)] [HMAC (32 bytes)]
+ * 
+ * Returns: 0 on success, -1 on failure
+ */
+static int bank_send_encrypted(Bank *bank, const unsigned char *plaintext, size_t plaintext_len)
+{
+    unsigned char encrypted[MAX_ENCRYPTED_SIZE];
+    unsigned char iv[16];
+    unsigned char ciphertext[MAX_ENCRYPTED_SIZE];
+    size_t ciphertext_len = 0;
+    unsigned char hmac[32];
+    
+    // Encrypt the plaintext
+    if (aes_encrypt(bank->key_K, plaintext, plaintext_len, 
+                    ciphertext, &ciphertext_len, iv) != 0) {
+        return -1;
+    }
+    
+    // Build the packet: IV || ciphertext
+    memcpy(encrypted, iv, 16);
+    memcpy(encrypted + 16, ciphertext, ciphertext_len);
+    size_t data_len = 16 + ciphertext_len;
+    
+    // Compute HMAC over IV || ciphertext (encrypt-then-MAC)
+    if (hmac_sha256(bank->key_K, encrypted, data_len, hmac) != 0) {
+        return -1;
+    }
+    
+    // Append HMAC
+    memcpy(encrypted + data_len, hmac, 32);
+    size_t total_len = data_len + 32;
+    
+    // Send to ATM via router
+    ssize_t sent = bank_send(bank, (char*)encrypted, total_len);
+    if (sent < 0 || (size_t)sent != total_len) {
+        return -1;
+    }
+    
+    return 0;
+}
+
+/**
+ * bank_recv_encrypted: Decrypt received encrypted message
+ * 
+ * Protocol: [IV (16 bytes)] [Ciphertext (variable)] [HMAC (32 bytes)]
+ * 
+ * Returns: length of plaintext on success, -1 on failure
+ */
+static int bank_decrypt_message(Bank *bank, const unsigned char *encrypted, size_t encrypted_len,
+                                 unsigned char *plaintext, size_t max_plaintext_len)
+{
+    if (encrypted_len < (16 + 32)) {  // Minimum: IV + HMAC
+        return -1;
+    }
+    
+    // Extract components
+    const unsigned char *iv = encrypted;
+    size_t data_len = encrypted_len - 32;  // Everything except HMAC
+    const unsigned char *received_hmac = encrypted + data_len;
+    
+    // Verify HMAC over IV || ciphertext
+    if (hmac_verify(bank->key_K, encrypted, data_len, received_hmac) != 0) {
+        return -1;  // HMAC verification failed - possible tampering
+    }
+    
+    // Decrypt ciphertext
+    const unsigned char *ciphertext = encrypted + 16;
+    size_t ciphertext_len = data_len - 16;
+    size_t plaintext_len = 0;
+    
+    if (aes_decrypt(bank->key_K, ciphertext, ciphertext_len, iv,
+                    plaintext, &plaintext_len) != 0) {
+        return -1;
+    }
+    
+    if (plaintext_len > max_plaintext_len) {
+        return -1;
+    }
+    
+    return (int)plaintext_len;
+}
+
 void bank_process_remote_command(Bank *bank, char *command, size_t len)
 {
-    // TODO: Implement the bank side of the ATM-bank protocol using Idea 1
-    // For now, we leave this unimplemented so that you can focus
-    // on the local bank commands and ATM session logic first.
-
-    (void)bank;
-    (void)command;
-    (void)len;
-
-    // Example placeholder (do nothing).
-    // When you implement Idea 1, you'll:
-    //  - decrypt & verify MAC on 'command'
-    //  - parse message type (login, balance, withdraw)
-    //  - check accounts and respond via bank_send()
+    unsigned char plaintext[MAX_PLAINTEXT_SIZE];
+    
+    // Decrypt and verify the incoming message
+    int plaintext_len = bank_decrypt_message(bank, (unsigned char*)command, len, 
+                                             plaintext, sizeof(plaintext));
+    if (plaintext_len < 0) {
+        // Decryption or HMAC verification failed - ignore silently
+        return;
+    }
+    
+    // All messages have at least a header
+    if (plaintext_len < (int)sizeof(msg_header_t)) {
+        return;
+    }
+    
+    msg_header_t *header = (msg_header_t*)plaintext;
+    
+    // Route based on message type
+    switch (header->msg_type) {
+        case MSG_LOGIN_REQ: {
+            if (plaintext_len < (int)sizeof(msg_login_req_t)) {
+                return;
+            }
+            
+            msg_login_req_t *req = (msg_login_req_t*)plaintext;
+            
+            // Extract username (null-terminate it)
+            char username[USERNAME_SIZE + 1];
+            memcpy(username, req->header.username, USERNAME_SIZE);
+            username[USERNAME_SIZE] = '\0';
+            
+            // Remove any padding
+            for (int i = 0; i < USERNAME_SIZE; i++) {
+                if (username[i] == '\0') break;
+            }
+            
+            // Find the user
+            int user_idx = find_user(bank, username);
+            if (user_idx == -1) {
+                // User doesn't exist - send failure response
+                msg_login_resp_t resp;
+                memset(&resp, 0, sizeof(resp));
+                resp.header.msg_type = MSG_LOGIN_RESP;
+                prepare_username(resp.header.username, username);
+                resp.success = 0;
+                resp.seq_num = req->seq_num;  // Echo back the sequence number
+                
+                bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
+                return;
+            }
+            
+            User *user = &bank->users[user_idx];
+            uint64_t req_seq = ntohll(req->seq_num);
+            
+            // Check sequence number (must be > last_seq to prevent replay)
+            if (req_seq <= user->last_seq) {
+                // Replay attack detected - send failure
+                msg_login_resp_t resp;
+                memset(&resp, 0, sizeof(resp));
+                resp.header.msg_type = MSG_LOGIN_RESP;
+                prepare_username(resp.header.username, username);
+                resp.success = 0;
+                resp.seq_num = req->seq_num;
+                
+                bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
+                return;
+            }
+            
+            // Verify auth_token = HMAC(card_secret || PIN)
+            // PIN in message is 4 bytes, not null-terminated - need to copy to null-terminated buffer
+            char pin_str[PIN_SIZE + 1];
+            memcpy(pin_str, req->pin, PIN_SIZE);
+            pin_str[PIN_SIZE] = '\0';
+            
+            unsigned char expected_token[AUTH_TOKEN_SIZE];
+            if (compute_auth_token(user->card_secret, pin_str, expected_token) != 0) {
+                // Couldn't compute token - send failure
+                msg_login_resp_t resp;
+                memset(&resp, 0, sizeof(resp));
+                resp.header.msg_type = MSG_LOGIN_RESP;
+                prepare_username(resp.header.username, username);
+                resp.success = 0;
+                resp.seq_num = req->seq_num;
+                
+                bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
+                return;
+            }
+            
+            // Constant-time comparison of auth tokens
+            int tokens_match = 1;
+            for (int i = 0; i < AUTH_TOKEN_SIZE; i++) {
+                if (expected_token[i] != req->auth_token[i]) {
+                    tokens_match = 0;
+                }
+            }
+            
+            if (!tokens_match) {
+                // Wrong PIN - send failure
+                msg_login_resp_t resp;
+                memset(&resp, 0, sizeof(resp));
+                resp.header.msg_type = MSG_LOGIN_RESP;
+                prepare_username(resp.header.username, username);
+                resp.success = 0;
+                resp.seq_num = req->seq_num;
+                
+                bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
+                return;
+            }
+            
+            // Authentication successful - update sequence number and send success
+            user->last_seq = req_seq;
+            
+            msg_login_resp_t resp;
+            memset(&resp, 0, sizeof(resp));
+            resp.header.msg_type = MSG_LOGIN_RESP;
+            prepare_username(resp.header.username, username);
+            resp.success = 1;
+            resp.seq_num = req->seq_num;
+            
+            bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
+            break;
+        }
+        
+        case MSG_BALANCE_REQ:
+        case MSG_WITHDRAW_REQ:
+            // TODO: Implement in Phase 2F-2I
+            break;
+            
+        default:
+            // Unknown message type - ignore
+            break;
+    }
 }

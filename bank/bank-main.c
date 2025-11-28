@@ -19,22 +19,36 @@ int main(int argc, char**argv)
    char sendline[1000];
    char recvline[1000];
 
-   Bank *bank = bank_create();
+   // Check command line arguments
+   if (argc != 2) {
+       printf("Error opening bank initialization file\n");
+       return 64;
+   }
+
+   Bank *bank = bank_create(argv[1]);
 
    printf("%s", prompt);
    fflush(stdout);
+
+   int stdin_open = 1;  // Track if stdin is still available
 
    while(1)
    {
        fd_set fds;
        FD_ZERO(&fds);
-       FD_SET(0, &fds);
+       if (stdin_open) {
+           FD_SET(0, &fds);
+       }
        FD_SET(bank->sockfd, &fds);
        select(bank->sockfd+1, &fds, NULL, NULL, NULL);
 
-       if(FD_ISSET(0, &fds))
+       if(stdin_open && FD_ISSET(0, &fds))
        {
-           fgets(sendline, 10000,stdin);
+           if(fgets(sendline, 10000,stdin) == NULL)
+           {
+               // stdin closed (EOF) - exit gracefully
+               break;
+           }
            bank_process_local_command(bank, sendline, strlen(sendline));
            printf("%s", prompt);
            fflush(stdout);
