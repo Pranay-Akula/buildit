@@ -391,9 +391,42 @@ void atm_process_command(ATM *atm, char *command)
             return;
         }
 
-        // In the final version, we'll ask the bank if funds are sufficient.
-        // For now, pretend there are always enough funds and dispense.
-        printf("$%d dispensed\n", amt);
+        // Build withdraw request
+        msg_withdraw_req_t req;
+        memset(&req, 0, sizeof(req));
+        req.header.msg_type = MSG_WITHDRAW_REQ;
+        prepare_username(req.header.username, atm->current_user);
+        req.amount = htonl(amt);
+        req.seq_num = htonll(atm->seq);
+
+        // Send encrypted request
+        if (atm_send_encrypted(atm, (unsigned char*)&req, sizeof(req)) != 0) {
+            return;
+        }
+        atm->seq++;
+
+        // Receive encrypted response
+        unsigned char resp_buf[MAX_PLAINTEXT_SIZE];
+        int resp_len = atm_recv_encrypted(atm, resp_buf, sizeof(resp_buf));
+        if (resp_len < (int)sizeof(msg_withdraw_resp_t)) {
+            return;
+        }
+
+        msg_withdraw_resp_t *resp = (msg_withdraw_resp_t*)resp_buf;
+        if (resp->header.msg_type != MSG_WITHDRAW_RESP) {
+            return;
+        }
+
+        uint64_t resp_seq = ntohll(resp->seq_num);
+        if (resp_seq != atm->seq - 1) {
+            return;
+        }
+
+        if (resp->success == 1) {
+            printf("$%d dispensed\n", amt);
+        } else {
+            printf("Insufficient funds\n");
+        }
         return;
     }
 
@@ -412,9 +445,38 @@ void atm_process_command(ATM *atm, char *command)
             return;
         }
 
-        // In the final version, we'll query the bank for the real balance.
-        // For now, report a dummy balance of 0.
-        printf("$0\n");
+        // Build balance request
+        msg_balance_req_t req;
+        memset(&req, 0, sizeof(req));
+        req.header.msg_type = MSG_BALANCE_REQ;
+        prepare_username(req.header.username, atm->current_user);
+        req.seq_num = htonll(atm->seq);
+
+        // Send encrypted request
+        if (atm_send_encrypted(atm, (unsigned char*)&req, sizeof(req)) != 0) {
+            return;
+        }
+        atm->seq++;
+
+        // Receive encrypted response
+        unsigned char resp_buf[MAX_PLAINTEXT_SIZE];
+        int resp_len = atm_recv_encrypted(atm, resp_buf, sizeof(resp_buf));
+        if (resp_len < (int)sizeof(msg_balance_resp_t)) {
+            return;
+        }
+
+        msg_balance_resp_t *resp = (msg_balance_resp_t*)resp_buf;
+        if (resp->header.msg_type != MSG_BALANCE_RESP) {
+            return;
+        }
+
+        uint64_t resp_seq = ntohll(resp->seq_num);
+        if (resp_seq != atm->seq - 1) {
+            return;
+        }
+
+        int32_t balance = ntohl(resp->balance);
+        printf("$%d\n", balance);
         return;
     }
 

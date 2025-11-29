@@ -501,10 +501,114 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
             break;
         }
         
-        case MSG_BALANCE_REQ:
-        case MSG_WITHDRAW_REQ:
-            // TODO: Implement in Phase 2F-2I
+        case MSG_BALANCE_REQ: {
+            if (plaintext_len < (int)sizeof(msg_balance_req_t)) {
+                return;
+            }
+
+            msg_balance_req_t *req = (msg_balance_req_t*)plaintext;
+
+            char username[USERNAME_SIZE + 1];
+            memcpy(username, req->header.username, USERNAME_SIZE);
+            username[USERNAME_SIZE] = '\0';
+
+            int user_idx = find_user(bank, username);
+            if (user_idx == -1) {
+                msg_balance_resp_t resp;
+                memset(&resp, 0, sizeof(resp));
+                resp.header.msg_type = MSG_BALANCE_RESP;
+                prepare_username(resp.header.username, username);
+                resp.balance = htonl(0);
+                resp.seq_num = req->seq_num;
+                bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
+                return;
+            }
+
+            User *user = &bank->users[user_idx];
+            uint64_t req_seq = ntohll(req->seq_num);
+
+            if (req_seq <= user->last_seq) {
+                msg_balance_resp_t resp;
+                memset(&resp, 0, sizeof(resp));
+                resp.header.msg_type = MSG_BALANCE_RESP;
+                prepare_username(resp.header.username, username);
+                resp.balance = htonl(user->balance);
+                resp.seq_num = req->seq_num;
+                bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
+                return;
+            }
+
+            user->last_seq = req_seq;
+
+            msg_balance_resp_t resp;
+            memset(&resp, 0, sizeof(resp));
+            resp.header.msg_type = MSG_BALANCE_RESP;
+            prepare_username(resp.header.username, username);
+            resp.balance = htonl(user->balance);
+            resp.seq_num = req->seq_num;
+            bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
             break;
+        }
+
+        case MSG_WITHDRAW_REQ: {
+            if (plaintext_len < (int)sizeof(msg_withdraw_req_t)) {
+                return;
+            }
+
+            msg_withdraw_req_t *req = (msg_withdraw_req_t*)plaintext;
+
+            char username[USERNAME_SIZE + 1];
+            memcpy(username, req->header.username, USERNAME_SIZE);
+            username[USERNAME_SIZE] = '\0';
+
+            int user_idx = find_user(bank, username);
+            if (user_idx == -1) {
+                msg_withdraw_resp_t resp;
+                memset(&resp, 0, sizeof(resp));
+                resp.header.msg_type = MSG_WITHDRAW_RESP;
+                prepare_username(resp.header.username, username);
+                resp.success = 0;
+                resp.new_balance = htonl(0);
+                resp.seq_num = req->seq_num;
+                bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
+                return;
+            }
+
+            User *user = &bank->users[user_idx];
+            uint64_t req_seq = ntohll(req->seq_num);
+
+            if (req_seq <= user->last_seq) {
+                msg_withdraw_resp_t resp;
+                memset(&resp, 0, sizeof(resp));
+                resp.header.msg_type = MSG_WITHDRAW_RESP;
+                prepare_username(resp.header.username, username);
+                resp.success = 0;
+                resp.new_balance = htonl(user->balance);
+                resp.seq_num = req->seq_num;
+                bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
+                return;
+            }
+
+            int32_t amount = ntohl(req->amount);
+            uint8_t success = 0;
+
+            if (amount >= 0 && amount <= user->balance) {
+                user->balance -= amount;
+                success = 1;
+            }
+
+            user->last_seq = req_seq;
+
+            msg_withdraw_resp_t resp;
+            memset(&resp, 0, sizeof(resp));
+            resp.header.msg_type = MSG_WITHDRAW_RESP;
+            prepare_username(resp.header.username, username);
+            resp.success = success;
+            resp.new_balance = htonl(user->balance);
+            resp.seq_num = req->seq_num;
+            bank_send_encrypted(bank, (unsigned char*)&resp, sizeof(resp));
+            break;
+        }
             
         default:
             // Unknown message type - ignore
