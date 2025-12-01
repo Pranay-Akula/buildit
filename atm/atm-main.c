@@ -1,8 +1,4 @@
-/* 
- * The main program for the ATM.
- *
- * You are free to change this as necessary.
- */
+// ATM main loop
 
 #include "atm.h"
 #include <stdio.h>

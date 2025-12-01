@@ -38,13 +38,11 @@ ATM* atm_create(const char *atm_init_file)
     atm->logged_in = 0;
     atm->current_user[0] = '\0';
     
-    // Initialize cryptographic state
-    atm->seq = 1;  // Start at 1 (bank's last_seq starts at 0, so first message must be > 0)
+    atm->seq = 1;
     atm->key_loaded = 0;
     memset(atm->key_K, 0, KEY_SIZE);
     memset(atm->card_secret, 0, CARD_SECRET_SIZE);
     
-    // Load shared key K from init file
     FILE *key_file = fopen(atm_init_file, "rb");
     if (key_file == NULL) {
         printf("Error opening ATM initialization file\n");
@@ -84,9 +82,8 @@ ssize_t atm_send(ATM *atm, char *data, size_t data_len)
 
 ssize_t atm_recv(ATM *atm, char *data, size_t max_data_len)
 {
-    // Set a timeout to prevent infinite blocking
     struct timeval tv;
-    tv.tv_sec = 5;   // 5 second timeout
+    tv.tv_sec = 5;
     tv.tv_usec = 0;
     
     fd_set readfds;
@@ -95,15 +92,13 @@ ssize_t atm_recv(ATM *atm, char *data, size_t max_data_len)
     
     int result = select(atm->sockfd + 1, &readfds, NULL, NULL, &tv);
     if (result <= 0) {
-        // Timeout or error
         return -1;
     }
     
-    // Data is available, receive it
+    // Receive data
     return recvfrom(atm->sockfd, data, max_data_len, 0, NULL, NULL);
 }
 
-// Helper: trim trailing newline from a string
 static void trim_newline(char *s)
 {
     size_t n = strlen(s);
@@ -112,7 +107,6 @@ static void trim_newline(char *s)
     }
 }
 
-// Helper: check that username is [a-zA-Z]+ and <= 250 chars
 static int is_valid_username(const char *u)
 {
     size_t n = strlen(u);
@@ -124,7 +118,6 @@ static int is_valid_username(const char *u)
     return 1;
 }
 
-// Helper: check PIN is exactly 4 digits
 static int is_valid_pin(const char *pin)
 {
     if (strlen(pin) != 4) return 0;
@@ -134,7 +127,6 @@ static int is_valid_pin(const char *pin)
     return 1;
 }
 
-// Helper: check amt is [0-9]+ and fits into int (non-negative)
 static int parse_amount(const char *s, int *out)
 {
     if (s == NULL || *s == '\0') return 0;
@@ -152,13 +144,7 @@ static int parse_amount(const char *s, int *out)
     return 1;
 }
 
-/**
- * atm_send_encrypted: Encrypt plaintext message and send to bank
- * 
- * Protocol: [IV (16 bytes)] [Ciphertext (variable)] [HMAC (32 bytes)]
- * 
- * Returns: 0 on success, -1 on failure
- */
+// Encrypt and send message
 static int atm_send_encrypted(ATM *atm, const unsigned char *plaintext, size_t plaintext_len)
 {
     unsigned char encrypted[MAX_ENCRYPTED_SIZE];
@@ -167,8 +153,6 @@ static int atm_send_encrypted(ATM *atm, const unsigned char *plaintext, size_t p
     size_t ciphertext_len = 0;
     unsigned char hmac[32];
     
-    // Encrypt the plaintext (generates random IV internally)
-    // Signature: aes_encrypt(key, plaintext, plaintext_len, ciphertext, ciphertext_len, iv)
     if (aes_encrypt(atm->key_K, plaintext, plaintext_len, 
                     ciphertext, &ciphertext_len, iv) != 0) {
         return -1;
@@ -179,7 +163,7 @@ static int atm_send_encrypted(ATM *atm, const unsigned char *plaintext, size_t p
     memcpy(encrypted + 16, ciphertext, ciphertext_len);
     size_t data_len = 16 + ciphertext_len;
     
-    // Compute HMAC over IV || ciphertext (encrypt-then-MAC)
+    // HMAC over IV + ciphertext
     if (hmac_sha256(atm->key_K, encrypted, data_len, hmac) != 0) {
         return -1;
     }
@@ -197,13 +181,7 @@ static int atm_send_encrypted(ATM *atm, const unsigned char *plaintext, size_t p
     return 0;
 }
 
-/**
- * atm_recv_encrypted: Receive and decrypt message from bank
- * 
- * Protocol: [IV (16 bytes)] [Ciphertext (variable)] [HMAC (32 bytes)]
- * 
- * Returns: length of plaintext on success, -1 on failure
- */
+// Receive and decrypt message
 static int atm_recv_encrypted(ATM *atm, unsigned char *plaintext, size_t max_plaintext_len)
 {
     unsigned char encrypted[MAX_ENCRYPTED_SIZE];
@@ -219,9 +197,8 @@ static int atm_recv_encrypted(ATM *atm, unsigned char *plaintext, size_t max_pla
     size_t data_len = recv_len - 32;  // Everything except HMAC
     unsigned char *received_hmac = encrypted + data_len;
     
-    // Verify HMAC over IV || ciphertext
     if (hmac_verify(atm->key_K, encrypted, data_len, received_hmac) != 0) {
-        return -1;  // HMAC verification failed - possible tampering
+        return -1;
     }
     
     // Decrypt ciphertext
@@ -229,7 +206,6 @@ static int atm_recv_encrypted(ATM *atm, unsigned char *plaintext, size_t max_pla
     size_t ciphertext_len = data_len - 16;
     size_t plaintext_len = 0;
     
-    // Signature: aes_decrypt(key, ciphertext, ciphertext_len, iv, plaintext, plaintext_len)
     if (aes_decrypt(atm->key_K, ciphertext, ciphertext_len, iv,
                     plaintext, &plaintext_len) != 0) {
         return -1;
@@ -328,7 +304,7 @@ void atm_process_command(ATM *atm, char *command)
             return;
         }
         
-        atm->seq++;  // Increment sequence number after sending
+        atm->seq++;
 
         // Receive encrypted login response
         unsigned char response_buf[MAX_PLAINTEXT_SIZE];
@@ -348,20 +324,17 @@ void atm_process_command(ATM *atm, char *command)
             return;
         }
         
-        // Verify sequence number (should match our sent seq)
         uint64_t resp_seq = ntohll(login_resp->seq_num);
         if (resp_seq != atm->seq - 1) {
             printf("Not authorized\n");
             return;
         }
 
-        // Check success flag
         if (login_resp->success != 1) {
             printf("Not authorized\n");
             return;
         }
 
-        // Success - log in the user
         printf("Authorized\n");
         atm->logged_in = 1;
         strncpy(atm->current_user, user, sizeof(atm->current_user));

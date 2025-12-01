@@ -1,6 +1,4 @@
-/*
- * Crypto utilities implementation using OpenSSL
- */
+// Crypto functions using OpenSSL
 
 #include "crypto.h"
 #include <openssl/evp.h>
@@ -18,30 +16,25 @@ int aes_encrypt(const unsigned char *key,
     int len = 0;
     int ciphertext_len_int = 0;
 
-    // Generate random IV
     if (RAND_bytes(iv, IV_SIZE) != 1) {
         return -1;
     }
 
-    // Create and initialize context
     if (!(ctx = EVP_CIPHER_CTX_new())) {
         return -1;
     }
 
-    // Initialize encryption with AES-256-CBC
     if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
 
-    // Encrypt the plaintext
     if (EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
     ciphertext_len_int = len;
 
-    // Finalize encryption (adds padding)
     if (EVP_EncryptFinal_ex(ctx, ciphertext + len, &len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return -1;
@@ -63,25 +56,21 @@ int aes_decrypt(const unsigned char *key,
     int len = 0;
     int plaintext_len_int = 0;
 
-    // Create and initialize context
     if (!(ctx = EVP_CIPHER_CTX_new())) {
         return -1;
     }
 
-    // Initialize decryption with AES-256-CBC
     if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
 
-    // Decrypt the ciphertext
     if (EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
     plaintext_len_int = len;
 
-    // Finalize decryption (removes padding)
     if (EVP_DecryptFinal_ex(ctx, plaintext + len, &len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return -1;
@@ -121,7 +110,6 @@ int hmac_verify(const unsigned char *key,
         return -1;
     }
 
-    // Constant-time comparison to prevent timing attacks
     if (CRYPTO_memcmp(computed_hmac, expected_hmac, HMAC_SIZE) != 0) {
         return -1;
     }
@@ -141,13 +129,10 @@ int compute_auth_token(const unsigned char *card_secret,
                        const char *pin,
                        unsigned char *auth_token)
 {
-    // Concatenate card_secret (32 bytes) + PIN (4 bytes)
     unsigned char combined[36];
     memcpy(combined, card_secret, CARD_SECRET_SIZE);
     memcpy(combined + CARD_SECRET_SIZE, pin, 4);
 
-    // HMAC the combined value with itself as key (one-way function)
-    // This ensures attacker needs BOTH card secret AND PIN
     if (hmac_sha256(card_secret, combined, 36, auth_token) != 0) {
         return -1;
     }

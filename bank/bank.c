@@ -34,11 +34,10 @@ Bank* bank_create(const char *bank_init_file)
     // Initialize account state
     bank->num_users = 0;
     
-    // Initialize cryptographic state
     bank->key_loaded = 0;
     memset(bank->key_K, 0, KEY_SIZE);
     
-    // Load shared key K from init file
+    // Load key from init file
     FILE *key_file = fopen(bank_init_file, "rb");
     if (key_file == NULL) {
         printf("Error opening bank initialization file\n");
@@ -83,7 +82,6 @@ ssize_t bank_recv(Bank *bank, char *data, size_t max_data_len)
     return recvfrom(bank->sockfd, data, max_data_len, 0, NULL, NULL);
 }
 
-// Helper: trim trailing whitespace/newline from a buffer (in-place)
 static void trim_buffer(char *buf)
 {
     size_t n = strlen(buf);
@@ -94,7 +92,6 @@ static void trim_buffer(char *buf)
     }
 }
 
-// Helper: check username is [a-zA-Z]+ and <= 250 chars
 static int is_valid_username(const char *u)
 {
     size_t n = strlen(u);
@@ -106,7 +103,6 @@ static int is_valid_username(const char *u)
     return 1;
 }
 
-// Helper: PIN is exactly 4 digits
 static int is_valid_pin(const char *pin)
 {
     if (strlen(pin) != 4) return 0;
@@ -116,7 +112,6 @@ static int is_valid_pin(const char *pin)
     return 1;
 }
 
-// Helper: parse amount as non-negative int, detect overflow
 static int parse_amount(const char *s, int *out)
 {
     if (s == NULL || *s == '\0') return 0;
@@ -133,7 +128,6 @@ static int parse_amount(const char *s, int *out)
     return 1;
 }
 
-// Helper: find user index by name, or -1 if not found
 static int find_user(Bank *bank, const char *username)
 {
     for (int i = 0; i < bank->num_users; i++) {
@@ -193,14 +187,12 @@ void bank_process_local_command(Bank *bank, char *command, size_t len)
             return;
         }
 
-        // Generate random card secret (32 bytes)
         unsigned char card_secret[CARD_SECRET_SIZE];
         if (generate_random_bytes(card_secret, CARD_SECRET_SIZE) != 0) {
             printf("Error creating card file for user %s\n", user);
             return;
         }
 
-        // Create card file first (so if it fails, we don't modify state)
         char card_filename[300];
         snprintf(card_filename, sizeof(card_filename), "%s.card", user);
         FILE *cf = fopen(card_filename, "wb");
@@ -209,17 +201,15 @@ void bank_process_local_command(Bank *bank, char *command, size_t len)
             return;
         }
 
-        // Write 32-byte card secret to card file (binary format)
         size_t written = fwrite(card_secret, 1, CARD_SECRET_SIZE, cf);
         fclose(cf);
         
         if (written != CARD_SECRET_SIZE) {
-            remove(card_filename);  // Clean up partial file
+            remove(card_filename);
             printf("Error creating card file for user %s\n", user);
             return;
         }
 
-        // Now update bank state
         User *u = &bank->users[bank->num_users++];
         strncpy(u->username, user, sizeof(u->username));
         u->username[sizeof(u->username)-1] = '\0';
@@ -227,9 +217,8 @@ void bank_process_local_command(Bank *bank, char *command, size_t len)
         u->pin[sizeof(u->pin)-1] = '\0';
         u->balance = balance;
         
-        // Store card secret and initialize sequence number
         memcpy(u->card_secret, card_secret, CARD_SECRET_SIZE);
-        u->last_seq = 0;  // Initialize sequence number to 0
+        u->last_seq = 0;
 
         printf("Created user %s\n", user);
         return;
@@ -256,7 +245,6 @@ void bank_process_local_command(Bank *bank, char *command, size_t len)
             return;
         }
 
-        // Check overflow: if users[idx].balance + amt > INT_MAX
         if (amt > 0 && bank->users[idx].balance > INT_MAX - amt) {
             printf("Too rich for this program\n");
             return;
@@ -291,13 +279,7 @@ void bank_process_local_command(Bank *bank, char *command, size_t len)
     printf("Invalid command\n");
 }
 
-/**
- * bank_send_encrypted: Encrypt plaintext message and send to ATM
- * 
- * Protocol: [IV (16 bytes)] [Ciphertext (variable)] [HMAC (32 bytes)]
- * 
- * Returns: 0 on success, -1 on failure
- */
+// Encrypt and send message
 static int bank_send_encrypted(Bank *bank, const unsigned char *plaintext, size_t plaintext_len)
 {
     unsigned char encrypted[MAX_ENCRYPTED_SIZE];
@@ -317,7 +299,6 @@ static int bank_send_encrypted(Bank *bank, const unsigned char *plaintext, size_
     memcpy(encrypted + 16, ciphertext, ciphertext_len);
     size_t data_len = 16 + ciphertext_len;
     
-    // Compute HMAC over IV || ciphertext (encrypt-then-MAC)
     if (hmac_sha256(bank->key_K, encrypted, data_len, hmac) != 0) {
         return -1;
     }
@@ -335,13 +316,7 @@ static int bank_send_encrypted(Bank *bank, const unsigned char *plaintext, size_
     return 0;
 }
 
-/**
- * bank_recv_encrypted: Decrypt received encrypted message
- * 
- * Protocol: [IV (16 bytes)] [Ciphertext (variable)] [HMAC (32 bytes)]
- * 
- * Returns: length of plaintext on success, -1 on failure
- */
+// Decrypt received message
 static int bank_decrypt_message(Bank *bank, const unsigned char *encrypted, size_t encrypted_len,
                                  unsigned char *plaintext, size_t max_plaintext_len)
 {
@@ -354,9 +329,8 @@ static int bank_decrypt_message(Bank *bank, const unsigned char *encrypted, size
     size_t data_len = encrypted_len - 32;  // Everything except HMAC
     const unsigned char *received_hmac = encrypted + data_len;
     
-    // Verify HMAC over IV || ciphertext
     if (hmac_verify(bank->key_K, encrypted, data_len, received_hmac) != 0) {
-        return -1;  // HMAC verification failed - possible tampering
+        return -1;
     }
     
     // Decrypt ciphertext
@@ -380,11 +354,9 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
 {
     unsigned char plaintext[MAX_PLAINTEXT_SIZE];
     
-    // Decrypt and verify the incoming message
     int plaintext_len = bank_decrypt_message(bank, (unsigned char*)command, len, 
                                              plaintext, sizeof(plaintext));
     if (plaintext_len < 0) {
-        // Decryption or HMAC verification failed - ignore silently
         return;
     }
     
@@ -404,20 +376,17 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
             
             msg_login_req_t *req = (msg_login_req_t*)plaintext;
             
-            // Extract username (null-terminate it)
             char username[USERNAME_SIZE + 1];
             memcpy(username, req->header.username, USERNAME_SIZE);
             username[USERNAME_SIZE] = '\0';
             
-            // Remove any padding
             for (int i = 0; i < USERNAME_SIZE; i++) {
                 if (username[i] == '\0') break;
             }
             
-            // Find the user
+            // Find user
             int user_idx = find_user(bank, username);
             if (user_idx == -1) {
-                // User doesn't exist - send failure response
                 msg_login_resp_t resp;
                 memset(&resp, 0, sizeof(resp));
                 resp.header.msg_type = MSG_LOGIN_RESP;
@@ -432,9 +401,8 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
             User *user = &bank->users[user_idx];
             uint64_t req_seq = ntohll(req->seq_num);
             
-            // Check sequence number (must be > last_seq to prevent replay)
+            // Replay protection
             if (req_seq <= user->last_seq) {
-                // Replay attack detected - send failure
                 msg_login_resp_t resp;
                 memset(&resp, 0, sizeof(resp));
                 resp.header.msg_type = MSG_LOGIN_RESP;
@@ -446,15 +414,13 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
                 return;
             }
             
-            // Verify auth_token = HMAC(card_secret || PIN)
-            // PIN in message is 4 bytes, not null-terminated - need to copy to null-terminated buffer
+            // PIN needs null terminator
             char pin_str[PIN_SIZE + 1];
             memcpy(pin_str, req->pin, PIN_SIZE);
             pin_str[PIN_SIZE] = '\0';
             
             unsigned char expected_token[AUTH_TOKEN_SIZE];
             if (compute_auth_token(user->card_secret, pin_str, expected_token) != 0) {
-                // Couldn't compute token - send failure
                 msg_login_resp_t resp;
                 memset(&resp, 0, sizeof(resp));
                 resp.header.msg_type = MSG_LOGIN_RESP;
@@ -466,7 +432,6 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
                 return;
             }
             
-            // Constant-time comparison of auth tokens
             int tokens_match = 1;
             for (int i = 0; i < AUTH_TOKEN_SIZE; i++) {
                 if (expected_token[i] != req->auth_token[i]) {
@@ -475,7 +440,6 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
             }
             
             if (!tokens_match) {
-                // Wrong PIN - send failure
                 msg_login_resp_t resp;
                 memset(&resp, 0, sizeof(resp));
                 resp.header.msg_type = MSG_LOGIN_RESP;
@@ -487,7 +451,6 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
                 return;
             }
             
-            // Authentication successful - update sequence number and send success
             user->last_seq = req_seq;
             
             msg_login_resp_t resp;
@@ -611,7 +574,6 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
         }
             
         default:
-            // Unknown message type - ignore
             break;
     }
 }

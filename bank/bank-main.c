@@ -1,8 +1,4 @@
-/* 
- * The main program for the Bank.
- *
- * You are free to change this as necessary.
- */
+// Bank main loop
 
 #include <string.h>
 #include <sys/select.h>
@@ -30,7 +26,7 @@ int main(int argc, char**argv)
    printf("%s", prompt);
    fflush(stdout);
 
-   int stdin_open = 1;  // Track if stdin is still available
+   int stdin_open = 1;
 
    while(1)
    {
@@ -46,8 +42,7 @@ int main(int argc, char**argv)
        {
            if(fgets(sendline, 10000,stdin) == NULL)
            {
-               // stdin closed (EOF) - exit gracefully
-               break;
+               break;  // EOF
            }
            bank_process_local_command(bank, sendline, strlen(sendline));
            printf("%s", prompt);

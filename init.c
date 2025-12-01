@@ -1,15 +1,5 @@
-/*
- * Init program - creates shared secret key files for ATM and Bank
- * 
- * Usage: init <filename>
- * 
- * Creates:
- *   <filename>.atm  - contains 32-byte shared key K
- *   <filename>.bank - contains 32-byte shared key K
- * 
- * This shared key is used for encrypting and authenticating all
- * ATM-Bank communication.
- */
+// Init program: generates shared key files for ATM and Bank
+// Usage: init <filename>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,19 +9,12 @@
 
 #define KEY_SIZE 32
 
-/*
- * Check if a file exists
- */
 static int file_exists(const char *filename)
 {
     struct stat buffer;
     return (stat(filename, &buffer) == 0);
 }
 
-/*
- * Write key to file
- * Returns 0 on success, -1 on error
- */
 static int write_key_file(const char *filename, const unsigned char *key)
 {
     FILE *f = fopen(filename, "wb");
