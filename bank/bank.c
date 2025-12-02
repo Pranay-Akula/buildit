@@ -414,13 +414,8 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
                 return;
             }
             
-            // PIN needs null terminator
-            char pin_str[PIN_SIZE + 1];
-            memcpy(pin_str, req->pin, PIN_SIZE);
-            pin_str[PIN_SIZE] = '\0';
-            
             unsigned char expected_token[AUTH_TOKEN_SIZE];
-            if (compute_auth_token(user->card_secret, pin_str, expected_token) != 0) {
+            if (compute_auth_token(user->card_secret, user->pin, expected_token) != 0) {
                 msg_login_resp_t resp;
                 memset(&resp, 0, sizeof(resp));
                 resp.header.msg_type = MSG_LOGIN_RESP;
