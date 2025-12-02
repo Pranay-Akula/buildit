@@ -257,8 +257,8 @@ void bank_process_local_command(Bank *bank, char *command, size_t len)
 
     // BALANCE
     if (strcmp(cmd, "balance") == 0) {
-        char user[256];
-        int num = sscanf(p, "%*s %255s", user);
+        char user[256], extra[64];
+        int num = sscanf(p, "%*s %255s %63s", user, extra);
         // There should be exactly one argument
         if (num != 1 || !is_valid_username(user)) {
             printf("Usage:  balance <user-name>\n");
@@ -432,14 +432,12 @@ void bank_process_remote_command(Bank *bank, char *command, size_t len)
                 return;
             }
             
-            int tokens_match = 1;
+            volatile unsigned char tokens_match = 0;
             for (int i = 0; i < AUTH_TOKEN_SIZE; i++) {
-                if (expected_token[i] != req->auth_token[i]) {
-                    tokens_match = 0;
-                }
+                tokens_match |= (expected_token[i] ^ req->auth_token[i]);
             }
             
-            if (!tokens_match) {
+            if (tokens_match != 0) {
                 msg_login_resp_t resp;
                 memset(&resp, 0, sizeof(resp));
                 resp.header.msg_type = MSG_LOGIN_RESP;
